@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>自同构性折线 · Self-Similar Polylines</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #0b0d12;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: 0.04em;
+      background: linear-gradient(90deg, #f472b6, #a78bfa, #38bdf8, #34d399, #fbbf24);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 18px;
+      align-items: center;
+      justify-content: center;
+      background: #141820;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 12px 18px;
+      margin-bottom: 12px;
+      max-width: 960px;
+      width: 100%;
+    }
+    .ctrl-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .ctrl-group label { font-size: 0.88rem; color: #94a3b8; }
+    button {
+      background: #1e293b;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    button:hover { background: #334155; border-color: #475569; }
+    button:active { background: #0f172a; }
+    #levelDisplay {
+      min-width: 36px;
+      text-align: center;
+      font-weight: 700;
+      font-size: 1.15rem;
+      color: #38bdf8;
+    }
+    .levels-toggle {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+      max-width: 960px;
+      width: 100%;
+      justify-content: center;
+      margin-bottom: 12px;
+      min-height: 34px;
+    }
+    .levels-toggle label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      padding: 3px 9px;
+      border-radius: 6px;
+      background: #141820;
+      border: 1px solid #1e293b;
+      user-select: none;
+      transition: border-color 0.15s;
+    }
+    .levels-toggle label:hover { border-color: #475569; }
+    .levels-toggle input { cursor: pointer; accent-color: #38bdf8; }
+    .canvas-wrap {
+      background: #06080c;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+      cursor: crosshair;
+      position: relative;
+    }
+    .canvas-wrap.dragging { cursor: grabbing; }
+    canvas {
+      display: block;
+      background: #030508;
+    }
+    .zoom-info {
+      position: absolute;
+      right: 36px;
+      bottom: 24px;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      background: rgba(0,0,0,0.6);
+      padding: 3px 8px;
+      border-radius: 6px;
+      pointer-events: none;
+      font-variant-numeric: tabular-nums;
+    }
+    .info {
+      margin-top: 12px;
+      font-size: 0.78rem;
+      color: #64748b;
+      text-align: center;
+      max-width: 900px;
+      line-height: 1.55;
+    }
+  </style>
+</head>
+<body>
+  <h1>自同构性折线 · Self-Similar Polylines</h1>
+
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>级别</label>
+      <button id="btnMinus" title="降低级别">−</button>
+      <span id="levelDisplay">1</span>
+      <button id="btnPlus" title="提高级别">+</button>
+    </div>
+    <div class="ctrl-group">
+      <button id="btnRegen">重新随机生成</button>
+    </div>
+    <div class="ctrl-group">
+      <button id="btnResetView" title="重置视图">重置视图</button>
+    </div>
+    <div class="ctrl-group">
+      <label>线宽</label>
+      <input type="range" id="lineWidth" min="0.5" max="4" step="0.5" value="1.6" style="width:90px">
+    </div>
+  </div>
+
+  <div class="levels-toggle" id="levelsToggle"></div>
+
+  <div class="canvas-wrap" id="canvasWrap">
+    <canvas id="cv" width="960" height="640"></canvas>
+    <div class="zoom-info" id="zoomInfo">X 100% · Y 100%</div>
+  </div>
+
+
+
+  <script>
+    const MAX_LEVEL = 4;
+    const X_MIN = 0, X_MAX = 100;
+    const Y_MIN = 0, Y_MAX = 11300;
+    const Y_END_MIN = 8000;
+
+    const CANVAS_W = 960;
+    const CANVAS_H = 640;
+
+    // 边距：左侧、右侧（Y轴 ≈3% 宽度）、顶部、底部（X轴 ≈3% 高度）
+    const PAD_L = 12;
+    // 右侧 Y 坐标条 ≈3% 宽度（略放宽到 ~36px 以便标签可读）
+    const PAD_R = Math.max(36, Math.round(CANVAS_W * 0.03));
+    const PAD_T = 12;
+    // 底部 X 坐标 ≈3% 高度
+    const PAD_B = Math.max(20, Math.round(CANVAS_H * 0.03));
+
+    const PLOT_W = CANVAS_W - PAD_L - PAD_R;
+    const PLOT_H = CANVAS_H - PAD_T - PAD_B;
+
+    // 右侧 Y 轴感应区（整个 PAD_R 区域，用于滚轮/拖动只缩 Y）
+    const Y_AXIS_ZONE = PAD_R;
+
+    function spectralColor(level, maxLv = MAX_LEVEL) {
+      const hue = (level / Math.max(1, maxLv)) * 300;
+      return `hsl(${hue}, 85%, 62%)`;
+    }
+
+    let currentLevel = 1;
+    let visible = new Array(MAX_LEVEL + 1).fill(true);
+    let polylines = [];
+    let lineWidth = 1.6;
+
+    // 独立 X / Y 缩放与平移
+    let view = {
+      scaleX: 1,
+      scaleY: 1,
+      offsetX: 0,
+      offsetY: 0
+    };
+    const MIN_SCALE = 0.25;
+    const MAX_SCALE = 100;
+
+    const canvas = document.getElementById('cv');
+    const ctx = canvas.getContext('2d');
+    const wrap = document.getElementById('canvasWrap');
+    const zoomInfo = document.getElementById('zoomInfo');
+
+    // ---------- 工具 ----------
+    function randInt(a, b) {
+      return a + Math.floor(Math.random() * (b - a + 1));
+    }
+    function randFloat(a, b) {
+      return a + Math.random() * (b - a);
+    }
+    function randomEvenJ() {
+      return [6, 8, 10][randInt(0, 2)];
+    }
+
+    function generateSegment(start, end, j) {
+      const pts = [{ x: start.x, y: start.y }];
+      const dx = (end.x - start.x) / (j - 1);
+      const ymin = Math.min(start.y, end.y);
+      const ymax = Math.max(start.y, end.y);
+      const range = Math.max(1, ymax - ymin);
+
+      let goHigh = end.y >= start.y;
+      let prevY = start.y;
+
+      for (let i = 1; i < j - 1; i++) {
+        const x = start.x + i * dx;
+        let y;
+        let tries = 0;
+        const preferHigh = goHigh;
+
+        do {
+          y = randFloat(ymin, ymax);
+          tries++;
+        } while (
+          tries < 90 &&
+          ((preferHigh && y <= prevY) || (!preferHigh && y >= prevY))
+        );
+
+        if ((preferHigh && y <= prevY) || (!preferHigh && y >= prevY)) {
+          if (preferHigh) {
+            y = Math.min(ymax, prevY + randFloat(0.8, Math.max(2, range * 0.45)));
+          } else {
+            y = Math.max(ymin, prevY - randFloat(0.8, Math.max(2, range * 0.45)));
+          }
+        }
+
+        pts.push({ x, y });
+        prevY = y;
+        goHigh = !goHigh;
+      }
+      pts.push({ x: end.x, y: end.y });
+      return pts;
+    }
+
+    function generateLevel0() {
+      const j = randomEvenJ();
+      const pts = [];
+      for (let i = 0; i < j; i++) {
+        pts.push({
+          x: X_MIN + (X_MAX - X_MIN) * i / (j - 1),
+          y: 0
+        });
+      }
+
+      let ok = false;
+      let attempts = 0;
+      while (!ok && attempts < 250) {
+        attempts++;
+        for (let i = 0; i < j - 1; i++) {
+          pts[i].y = randFloat(Y_MIN, Y_MAX);
+        }
+        pts[j - 1].y = randFloat(Y_END_MIN, Y_MAX);
+
+        for (let i = 1; i < j; i++) {
+          if (i % 2 === 1) {
+            if (pts[i].y <= pts[i - 1].y) {
+              pts[i].y = Math.min(Y_MAX, pts[i - 1].y + randFloat(80, 1800));
+            }
+          } else {
+            if (pts[i].y >= pts[i - 1].y) {
+              pts[i].y = Math.max(Y_MIN, pts[i - 1].y - randFloat(80, 1800));
+            }
+          }
+        }
+        if (pts[j - 1].y < Y_END_MIN) {
+          pts[j - 1].y = randFloat(Y_END_MIN, Y_MAX);
+        }
+
+        let good = pts[j - 1].y >= Y_END_MIN;
+        for (let i = 1; i < j; i++) {
+          if (i % 2 === 1 && pts[i].y <= pts[i - 1].y) good = false;
+          if (i % 2 === 0 && pts[i].y >= pts[i - 1].y) good = false;
+        }
+        ok = good;
+      }
+      return pts;
+    }
+
+    function generateNextLevel(prevPts) {
+      const next = [];
+      for (let s = 0; s < prevPts.length - 1; s++) {
+        const j = randomEvenJ();
+        const sub = generateSegment(prevPts[s], prevPts[s + 1], j);
+        if (s === 0) next.push(...sub);
+        else next.push(...sub.slice(1));
+      }
+      return next;
+    }
+
+    function ensureLevels(target) {
+      if (polylines.length === 0) polylines[0] = generateLevel0();
+      for (let lv = polylines.length; lv <= target; lv++) {
+        polylines[lv] = generateNextLevel(polylines[lv - 1]);
+      }
+    }
+
+    // ---------- 坐标映射 ----------
+    function mapX(x) {
+      const base = PAD_L + (x - X_MIN) / (X_MAX - X_MIN) * PLOT_W;
+      return base * view.scaleX + view.offsetX;
+    }
+    function mapY(y) {
+      const base = PAD_T + (1 - (y - Y_MIN) / (Y_MAX - Y_MIN)) * PLOT_H;
+      return base * view.scaleY + view.offsetY;
+    }
+
+    // 反向：屏幕坐标 → 数据坐标（用于缩放中心）
+    function unmapX(sx) {
+      const base = (sx - view.offsetX) / view.scaleX;
+      return X_MIN + (base - PAD_L) / PLOT_W * (X_MAX - X_MIN);
+    }
+    function unmapY(sy) {
+      const base = (sy - view.offsetY) / view.scaleY;
+      const t = 1 - (base - PAD_T) / PLOT_H;
+      return Y_MIN + t * (Y_MAX - Y_MIN);
+    }
+
+    // ---------- 绘制坐标轴与标签 ----------
+    function niceStep(range, targetCount) {
+      const raw = range / targetCount;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const norm = raw / mag;
+      let step;
+      if (norm < 1.5) step = 1;
+      else if (norm < 3) step = 2;
+      else if (norm < 7) step = 5;
+      else step = 10;
+      return step * mag;
+    }
+
+    function drawAxes() {
+      // 背景分隔线
+      ctx.strokeStyle = '#1a2030';
+      ctx.lineWidth = 1;
+      // 右侧 Y 轴竖线
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_W - PAD_R + 0.5, PAD_T);
+      ctx.lineTo(CANVAS_W - PAD_R + 0.5, CANVAS_H - PAD_B);
+      ctx.stroke();
+      // 底部 X 轴横线
+      ctx.beginPath();
+      ctx.moveTo(PAD_L, CANVAS_H - PAD_B + 0.5);
+      ctx.lineTo(CANVAS_W - PAD_R, CANVAS_H - PAD_B + 0.5);
+      ctx.stroke();
+
+      // 计算当前可见数据范围
+      const x0 = unmapX(PAD_L);
+      const x1 = unmapX(CANVAS_W - PAD_R);
+      const y0 = unmapY(CANVAS_H - PAD_B);
+      const y1 = unmapY(PAD_T);
+
+      const xRange = Math.abs(x1 - x0);
+      const yRange = Math.abs(y1 - y0);
+
+      const xStep = niceStep(xRange, 8);
+      const yStep = niceStep(yRange, 8);
+
+      ctx.font = '9px "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+
+      // --- X 轴刻度（底部）---
+      const xStart = Math.ceil(Math.min(x0, x1) / xStep) * xStep;
+      for (let xv = xStart; xv <= Math.max(x0, x1) + 1e-6; xv += xStep) {
+        const sx = mapX(xv);
+        if (sx < PAD_L - 5 || sx > CANVAS_W - PAD_R + 5) continue;
+        // 刻度线
+        ctx.strokeStyle = '#1e293b';
+        ctx.beginPath();
+        ctx.moveTo(sx, CANVAS_H - PAD_B);
+        ctx.lineTo(sx, CANVAS_H - PAD_B + 4);
+        ctx.stroke();
+        // 标签
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(xv.toFixed(xStep < 1 ? 1 : 0), sx, CANVAS_H - PAD_B + 5);
+        // 网格
+        ctx.strokeStyle = '#0f131a';
+        ctx.beginPath();
+        ctx.moveTo(sx, PAD_T);
+        ctx.lineTo(sx, CANVAS_H - PAD_B);
+        ctx.stroke();
+      }
+
+      // --- Y 轴刻度（右侧，紧凑塞进 ≈3% 条）---
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const yStart = Math.ceil(Math.min(y0, y1) / yStep) * yStep;
+      for (let yv = yStart; yv <= Math.max(y0, y1) + 1e-6; yv += yStep) {
+        const sy = mapY(yv);
+        if (sy < PAD_T - 5 || sy > CANVAS_H - PAD_B + 5) continue;
+        // 刻度线
+        ctx.strokeStyle = '#1e293b';
+        ctx.beginPath();
+        ctx.moveTo(CANVAS_W - PAD_R, sy);
+        ctx.lineTo(CANVAS_W - PAD_R + 4, sy);
+        ctx.stroke();
+        // 标签（尽量留在 PAD_R 内）
+        ctx.fillStyle = '#94a3b8';
+        let label;
+        if (Math.abs(yv) >= 1000) label = (yv / 1000).toFixed(1) + 'k';
+        else label = yv.toFixed(yStep < 1 ? 1 : 0);
+        ctx.fillText(label, CANVAS_W - PAD_R + 5, sy);
+        // 网格
+        ctx.strokeStyle = '#0f131a';
+        ctx.beginPath();
+        ctx.moveTo(PAD_L, sy);
+        ctx.lineTo(CANVAS_W - PAD_R, sy);
+        ctx.stroke();
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+      // 先画折线（被轴遮挡的部分无所谓，后面画轴）
+      for (let lv = 0; lv <= currentLevel; lv++) {
+        if (!visible[lv] || !polylines[lv]) continue;
+        const pts = polylines[lv];
+        if (pts.length < 2) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(mapX(pts[0].x), mapY(pts[0].y));
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(mapX(pts[i].x), mapY(pts[i].y));
+        }
+        ctx.strokeStyle = spectralColor(lv);
+        const lw = Math.max(0.4, (lineWidth - lv * 0.15) * Math.min(1.6, Math.sqrt((view.scaleX + view.scaleY) / 2)));
+        ctx.lineWidth = lw;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.globalAlpha = 0.9;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // 坐标轴与刻度（覆盖在最上层）
+      drawAxes();
+
+      // 右侧 Y 轴感应区提示（半透明竖条，仅当鼠标在附近时更明显，这里始终淡显）
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.04)';
+      ctx.fillRect(CANVAS_W - PAD_R, PAD_T, PAD_R, PLOT_H);
+
+      zoomInfo.textContent = `X ${Math.round(view.scaleX * 100)}% · Y ${Math.round(view.scaleY * 100)}%`;
+    }
+
+    // ---------- 缩放 / 平移 ----------
+    function zoomXAt(screenX, factor) {
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, view.scaleX * factor));
+      if (newScale === view.scaleX) return;
+      view.offsetX = screenX - (screenX - view.offsetX) * (newScale / view.scaleX);
+      view.scaleX = newScale;
+      draw();
+    }
+
+    function zoomYAt(screenY, factor) {
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, view.scaleY * factor));
+      if (newScale === view.scaleY) return;
+      view.offsetY = screenY - (screenY - view.offsetY) * (newScale / view.scaleY);
+      view.scaleY = newScale;
+      draw();
+    }
+
+    function resetView() {
+      view.scaleX = 1;
+      view.scaleY = 1;
+      view.offsetX = 0;
+      view.offsetY = 0;
+      draw();
+    }
+
+    // 滚轮：右侧 Y 轴区 → 只缩 Y；其余位置 → 只缩 X（TradingView 风格）
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+
+      // 判断是否在右侧 Y 轴感应区（≈3% 宽度）
+      if (mx >= CANVAS_W - PAD_R) {
+        zoomYAt(my, factor);
+      } else {
+        zoomXAt(mx, factor);
+      }
+    }, { passive: false });
+
+    // 拖拽：普通区域平移；Y 条内上下拖动 = 缩放 Y
+    let isDragging = false;
+    let isYZoomDragging = false;
+    let lastX = 0, lastY = 0;
+
+    function isInYAxisZone(clientX) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = clientX - rect.left;
+      return mx >= CANVAS_W - PAD_R;
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (isInYAxisZone(e.clientX)) {
+        isYZoomDragging = true;
+        wrap.classList.add('dragging');
+        canvas.style.cursor = 'ns-resize';
+      } else {
+        isDragging = true;
+        wrap.classList.add('dragging');
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (isYZoomDragging) {
+        const dy = e.clientY - lastY;
+        // 向上拖（dy < 0）放大 Y，向下拖缩小（与常见图表一致）
+        // 灵敏度：每像素约 0.6% 缩放
+        const factor = Math.exp(-dy * 0.006);
+        const rect = canvas.getBoundingClientRect();
+        const my = lastY - rect.top; // 以按下点为缩放中心更稳
+        zoomYAt(my, factor);
+        lastY = e.clientY;
+        return;
+      }
+      if (!isDragging) return;
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      view.offsetX += dx;
+      view.offsetY += dy;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      draw();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging || isYZoomDragging) {
+        isDragging = false;
+        isYZoomDragging = false;
+        wrap.classList.remove('dragging');
+        canvas.style.cursor = '';
+      }
+    });
+
+    // 鼠标移入/移出 Y 条时提示光标
+    canvas.addEventListener('mousemove', (e) => {
+      if (isDragging || isYZoomDragging) return;
+      if (isInYAxisZone(e.clientX)) {
+        canvas.style.cursor = 'ns-resize';
+      } else {
+        canvas.style.cursor = 'crosshair';
+      }
+    });
+
+    canvas.addEventListener('dblclick', resetView);
+
+    // 触摸（单指拖 + 双指缩放简化为整体）
+    let lastTouchDist = 0;
+    canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        lastTouchDist = Math.hypot(dx, dy);
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (e.touches.length === 1 && isDragging) {
+        const dx = e.touches[0].clientX - lastX;
+        const dy = e.touches[0].clientY - lastY;
+        view.offsetX += dx;
+        view.offsetY += dy;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        draw();
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const dist = Math.hypot(dx, dy);
+        if (lastTouchDist > 0) {
+          const factor = dist / lastTouchDist;
+          const rect = canvas.getBoundingClientRect();
+          const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+          const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+          // 双指同时缩 X 和 Y
+          zoomXAt(cx, factor);
+          zoomYAt(cy, factor);
+        }
+        lastTouchDist = dist;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', () => {
+      isDragging = false;
+      lastTouchDist = 0;
+    });
+
+    // ---------- UI ----------
+    function buildToggles() {
+      const box = document.getElementById('levelsToggle');
+      box.innerHTML = '';
+      for (let lv = 0; lv <= currentLevel; lv++) {
+        const lab = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = visible[lv];
+        cb.addEventListener('change', () => {
+          visible[lv] = cb.checked;
+          draw();
+        });
+        const swatch = document.createElement('span');
+        swatch.style.cssText = `
+          display:inline-block;width:11px;height:11px;border-radius:3px;
+          background:${spectralColor(lv)};margin-right:3px;
+          box-shadow:0 0 4px ${spectralColor(lv)}66;
+        `;
+        lab.appendChild(cb);
+        lab.appendChild(swatch);
+        lab.appendChild(document.createTextNode(`L${lv}`));
+        box.appendChild(lab);
+      }
+    }
+
+    function updateLevelDisplay() {
+      document.getElementById('levelDisplay').textContent = currentLevel;
+    }
+
+    document.getElementById('btnPlus').addEventListener('click', () => {
+      if (currentLevel >= MAX_LEVEL) return;
+      currentLevel++;
+      ensureLevels(currentLevel);
+      visible[currentLevel] = true;
+      updateLevelDisplay();
+      buildToggles();
+      draw();
+    });
+
+    document.getElementById('btnMinus').addEventListener('click', () => {
+      if (currentLevel <= 0) return;
+      currentLevel--;
+      updateLevelDisplay();
+      buildToggles();
+      draw();
+    });
+
+    document.getElementById('btnRegen').addEventListener('click', () => {
+      polylines = [];
+      ensureLevels(currentLevel);
+      draw();
+    });
+
+    document.getElementById('btnResetView').addEventListener('click', resetView);
+
+    document.getElementById('lineWidth').addEventListener('input', (e) => {
+      lineWidth = parseFloat(e.target.value);
+      draw();
+    });
+
+    // 初始化
+    ensureLevels(currentLevel);
+    updateLevelDisplay();
+    buildToggles();
+    draw();
+  </script>
+</body>
+</html>
